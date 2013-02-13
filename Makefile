@@ -1,3 +1,3 @@
-CARGS="-W -Wall"
+CARGS="-W -Wall -g -O0"
 all:
-	gcc -o convert dbf2cvs.c
+	gcc $(CARGS) -o convert dbf2cvs.c
