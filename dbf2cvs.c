@@ -210,6 +210,9 @@ int main(int argc, char **argv) {
 		} 
 		parsed += r;
 		switch(field_array[i]->type) {
+		    case 'I':
+			printf("'%ld'(%d) ", (int32_t *) buf, field_array[i]->length);
+		    break;
 		    case 'C':
 			printf("'%s'(%d) ", buf, field_array[i]->length);
 		    break;
@@ -218,8 +221,8 @@ int main(int argc, char **argv) {
 			field_time = (uint32_t *) ((char *) buf + sizeof(uint32_t)); 
 			printf("%lu/%lu(%d)", field_date, field_time);
 		    break;
-		    case 'I':
-			printf("'%d'(%d) ", buf, field_array[i]->length);
+		    case 'L':
+			printf("'%c'(%d) ", *buf, field_array[i]->length);
 		    break;
 		    default:
 			fprintf(stderr, "Unknown field type: '%c'\n", field_array[i]->type);
