@@ -87,6 +87,7 @@ int main(int argc, char **argv) {
     struct field_descriptor_t **field_array;
     uint8_t field_count; 
     uint32_t parsed, j;
+    uint32_t *field_date, *field_time;
 
     if (argc == 1 || argv[1] == NULL || *argv[1] == 0) {
 	fprintf(stderr, "Use %s <file>", argv[0]);
@@ -174,7 +175,7 @@ int main(int argc, char **argv) {
 	    realloc(buf, buf_siz);
 	} 
     } 
-    
+
     if (read(fd, &field_descriptor_terminator, sizeof(field_descriptor_terminator)) != sizeof(field_descriptor_terminator)) {
         fprintf(stderr, "field_descriptor_terminator read err\n");
         close(fd);
@@ -211,6 +212,14 @@ int main(int argc, char **argv) {
 		switch(field_array[i]->type) {
 		    case 'C':
 			printf("'%s'(%d) ", buf, field_array[i]->length);
+		    break;
+		    case '@':
+			field_date = (uint32_t *) buf; 
+			field_time = (uint32_t *) ((char *) buf + sizeof(uint32_t)); 
+			printf("%lu/%lu(%d)", field_date, field_time);
+		    break;
+		    case 'I':
+			printf("'%d'(%d) ", buf, field_array[i]->length);
 		    break;
 		    default:
 			fprintf(stderr, "Unknown field type: '%c'\n", field_array[i]->type);
