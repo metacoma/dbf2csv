@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#define DBF7_FIELD_DESCRIPTOR_TERMINATOR 0x0D
+
 struct dbf7_header_t {
     char db_type;
     char last_update[3];
@@ -46,22 +48,27 @@ struct field_descriptor_t {
     uint8_t reserved3[4];
 };
 
+struct field_properties_t {
+    uint16_t standart;		/* Number of Standard Properties */
+    uint16_t standart_start;	/* Start of Standard Property Descriptor Array. */ 
+    uint16_t custom;		/* Number of Custom Properties. */
+    uint16_t custom_start;	/* Start of Custom Property Descriptor Array. */
+    uint16_t ri;		/* Number of Referential Integrity (RI) properties. */
+    uint16_t ri_start;		/* Start of RI Property Descriptor Array */
+    uint16_t data_start;	/* Start of data - this points past the Descriptor arrays to data used by the arrays - for example Custom property names are stored here */
+    uint16_t actual_size;	/* Actual size of structure, including data (Note: in the .DBF this will be padded with zeroes to the nearest 0x200, and may have 0x1A at the end). If the structure contains RI data, it will not be padded. */
+}; 
+
 int main(int argc, char **argv) {
 
-    int fd;
+    int fd, i;
     char *db_type_desc;
-    /*
-    char db_type;
-    char last_update[3];
-    uint32_t row_count;
-    uint16_t header_size;
-    uint16_t 
-    */
     struct dbf7_header_t db_header;
     struct field_descriptor_t field;
+    uint8_t field_descriptor_terminator;
 
 
-    if (argc == 1 || argv[1] == NULL | *argv[1] == 0) {
+    if (argc == 1 || argv[1] == NULL || *argv[1] == 0) {
 	fprintf(stderr, "Use %s <file>", argv[0]);
 	return EXIT_FAILURE;
     } 
@@ -110,14 +117,35 @@ int main(int argc, char **argv) {
     printf("Row count: %u\n", db_header.row_count);
     printf("Header siz: %u, record siz: %u\n", db_header.header_siz, db_header.record_siz);
 
-    if (read(fd, &field, sizeof(struct field_descriptor_t)) != sizeof(struct field_descriptor_t)) { 
-	fprintf(stderr, "field_descriptior_t read err\n");
+    if ( (db_header.header_siz - (sizeof(struct dbf7_header_t) + 1) ) % sizeof(struct field_descriptor_t) != 0 ) {
+	fprintf(stderr, "db header size mistmatch\n");
 	close(fd);
 	return EXIT_FAILURE;
     } 
+
+    for (i = 0; i < (db_header.header_siz - (sizeof(struct dbf7_header_t) + 1)) / sizeof(struct field_descriptor_t) ; i++) {
+	if (read(fd, &field, sizeof(struct field_descriptor_t)) != sizeof(struct field_descriptor_t)) { 
+	    fprintf(stderr, "field_descriptior_t read err\n");
+	    close(fd);
+	    return EXIT_FAILURE;
+	} 
+	printf("#%d: %s '%c'\n", i, field.name, field.type);
+    } 
     
+    if (read(fd, &field_descriptor_terminator, sizeof(field_descriptor_terminator)) != sizeof(field_descriptor_terminator)) {
+        fprintf(stderr, "field_descriptor_terminator read err\n");
+        close(fd);
+        return EXIT_FAILURE;
+    } 
+
+
+    if (field_descriptor_terminator != DBF7_FIELD_DESCRIPTOR_TERMINATOR) {
+	fprintf(stderr, "field_descriptor_terminator error\n");
+	close(fd);
+    } 
+
+    printf("terminator: 0x%x\n", field_descriptor_terminator);
     
-    close(fd);
 
     return EXIT_SUCCESS;
 } 
