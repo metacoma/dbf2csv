@@ -31,9 +31,20 @@ struct dbf7_header_t {
     char language_driver[32];
 
     char reserved2[4];
-
     
 }; 
+
+struct field_descriptor_t {
+    char name[32];
+    uint8_t type;
+    uint8_t length;
+    uint8_t decimal_count;
+    uint8_t reserved[2];
+    uint8_t mdx; 
+    uint8_t reserved2[2];
+    uint32_t autoincrement;
+    uint8_t reserved3[4];
+};
 
 int main(int argc, char **argv) {
 
@@ -47,6 +58,7 @@ int main(int argc, char **argv) {
     uint16_t 
     */
     struct dbf7_header_t db_header;
+    struct field_descriptor_t field;
 
 
     if (argc == 1 || argv[1] == NULL | *argv[1] == 0) {
@@ -98,31 +110,12 @@ int main(int argc, char **argv) {
     printf("Row count: %u\n", db_header.row_count);
     printf("Header siz: %u, record siz: %u\n", db_header.header_siz, db_header.record_siz);
 
+    if (read(fd, &field, sizeof(struct field_descriptor_t)) != sizeof(struct field_descriptor_t)) { 
+	fprintf(stderr, "field_descriptior_t read err\n");
+	close(fd);
+	return EXIT_FAILURE;
+    } 
     
-    /*
-    if ( read(fd, &db_type, sizeof(char)) != sizeof(char) ) { 
-	fprintf(stderr, "read db_type err\n");
-	return EXIT_FAILURE;
-    } 
-    printf("Db type: %d\n", db_type);
-
-    if (read(fd, &last_update, sizeof(last_update)) != sizeof(last_update)) {
-	fprintf(stderr, "read db_type err\n");
-	return EXIT_FAILURE;
-    } 
-
-
-    printf("last modified: %d/%d/%d\n", last_update[0] + 1900, last_update[1], last_update[2]);
-
-    if (read(fd, &row_count, sizeof(row_count)) != sizeof(row_count) ) {
-	fprintf(stderr, "read row_count err\n");
-	return EXIT_FAILURE;
-    } 
-
-    printf("row count: %u\n", row_count);
-    */
-
-
     
     close(fd);
 
