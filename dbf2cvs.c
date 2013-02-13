@@ -1,5 +1,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -59,14 +60,33 @@ struct field_properties_t {
     uint16_t actual_size;	/* Actual size of structure, including data (Note: in the .DBF this will be padded with zeroes to the nearest 0x200, and may have 0x1A at the end). If the structure contains RI data, it will not be padded. */
 }; 
 
+struct standart_properties_t { 
+    uint16_t generational_number; /* Generational number. More than one value may exist for a property. The current value is the value with the highest generational number. */
+    uint16_t table_field_offset; /* Table field offset - base one. 01 for the first field in the table, 02 for the second field, etc. Note: this will be 0 in the case of a constraint.  */
+    uint8_t property_type; /* Which property is described in this record  */
+    uint8_t field_type; 
+    uint8_t array_element; /* 0x00 if the array element is a constraint, 0x02 otherwise. */
+    uint8_t reserved[4];
+    uint16_t offset; /* Offset from the start of this structure to the data for the property. The Required property has no data associated with it, so it is always 0. */
+    uint16_t width; /* Width of database field associated with the property, and hence size of the data (includes 0 terminator in the case of a constraint). */
+
+};
+
+
 int main(int argc, char **argv) {
 
-    int fd, i;
+    int fd, i, r;
     char *db_type_desc;
     struct dbf7_header_t db_header;
     struct field_descriptor_t field;
+    struct field_properties_t properties;
+    struct standart_properties_t standart;
     uint8_t field_descriptor_terminator;
-
+    char *buf = NULL;
+    uint32_t buf_siz = 0;
+    struct field_descriptor_t **field_array;
+    uint8_t field_count; 
+    uint32_t parsed, j;
 
     if (argc == 1 || argv[1] == NULL || *argv[1] == 0) {
 	fprintf(stderr, "Use %s <file>", argv[0]);
@@ -79,6 +99,10 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "can't open src.dbf\n");
 	return EXIT_FAILURE;
     } 
+
+    memset(&db_header, 0, sizeof(struct dbf7_header_t));
+    memset(&field, 0, sizeof(struct field_descriptor_t));
+    memset(&properties, 0, sizeof(struct field_properties_t));
 
     if (read(fd, &db_header, sizeof(db_header)) != sizeof(db_header)) {
 	fprintf(stderr, "db_header read err\n");
@@ -123,13 +147,32 @@ int main(int argc, char **argv) {
 	return EXIT_FAILURE;
     } 
 
-    for (i = 0; i < (db_header.header_siz - (sizeof(struct dbf7_header_t) + 1)) / sizeof(struct field_descriptor_t) ; i++) {
-	if (read(fd, &field, sizeof(struct field_descriptor_t)) != sizeof(struct field_descriptor_t)) { 
+    field_count = (db_header.header_siz - (sizeof(struct dbf7_header_t) + 1)) / sizeof(struct field_descriptor_t);
+
+    field_array = malloc( sizeof (struct field_descriptor_t *) * field_count);
+
+    if (field_array == NULL) {
+	fprintf(stderr, "malloc failed\n");
+	close(fd);
+	return EXIT_FAILURE;
+    } 
+
+    buf = malloc(256);
+    buf_siz = 256;
+    
+    for (i = 0; i < field_count; i++) {
+	field_array[i] = malloc(sizeof(struct field_descriptor_t));
+	/*if (read(fd, &field, sizeof(struct field_descriptor_t)) != sizeof(struct field_descriptor_t)) { */
+	if (read(fd, field_array[i], sizeof(struct field_descriptor_t)) != sizeof(struct field_descriptor_t)) { 
 	    fprintf(stderr, "field_descriptior_t read err\n");
 	    close(fd);
 	    return EXIT_FAILURE;
 	} 
-	printf("#%d: %s '%c'\n", i, field.name, field.type);
+	printf("#%d: %s '%c', size: %d\n", i, field_array[i]->name, field_array[i]->type, field_array[i]->length);
+	if (field_array[i]->length > buf_siz) {
+	    buf_siz = field_array[i]->length;
+	    realloc(buf, buf_siz);
+	} 
     } 
     
     if (read(fd, &field_descriptor_terminator, sizeof(field_descriptor_terminator)) != sizeof(field_descriptor_terminator)) {
@@ -139,13 +182,44 @@ int main(int argc, char **argv) {
     } 
 
 
+
     if (field_descriptor_terminator != DBF7_FIELD_DESCRIPTOR_TERMINATOR) {
 	fprintf(stderr, "field_descriptor_terminator error\n");
 	close(fd);
+        return EXIT_FAILURE;
     } 
 
-    printf("terminator: 0x%x\n", field_descriptor_terminator);
-    
 
+    for (parsed = 0, j = 0; parsed < db_header.record_siz * db_header.row_count; j++) {
+	    printf("#%u.", j);
+	    r = read(fd, buf, 1);
+	    if (r != 1) {
+		fprintf(stderr, "err read record separator");
+		close(fd);
+		return EXIT_FAILURE;
+	    } 
+	    parsed += r;
+	    for (i = 0; i < field_count; i++) { 
+		memset(buf, 0, buf_siz);
+		r = read(fd, buf, field_array[i]->length);
+		if (r != field_array[i]->length) {
+		    fprintf(stderr, "record read err: %d\n", r);
+		    close(fd);
+		    return EXIT_FAILURE;
+		} 
+		parsed += r;
+		switch(field_array[i]->type) {
+		    case 'C':
+			printf("'%s'(%d) ", buf, field_array[i]->length);
+		    break;
+		    default:
+			fprintf(stderr, "Unknown field type: '%c'\n", field_array[i]->type);
+		    break;
+		} 
+	    } 
+	    printf("\n");
+    } 
+
+    close(fd);
     return EXIT_SUCCESS;
 } 
