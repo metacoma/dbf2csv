@@ -272,7 +272,11 @@ int main(int argc, char **argv) {
 			    } 
 			    */
 			} 
-			printf("'%s'(%d) ", p, length);
+			/* remove last spaces */; 
+			while ( length && * ((char *) p + (length - 1)) == ' ') { 
+			    length--;
+			} 
+			printf("'%.*s'(%d) ", length, p, length);
 		    break;
 		    case '@':
 			field_date = (uint32_t *) buf; 
