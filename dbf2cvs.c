@@ -1,5 +1,7 @@
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <iconv.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -8,6 +10,13 @@
 #include <unistd.h>
 
 #define DBF7_FIELD_DESCRIPTOR_TERMINATOR 0x0D
+
+#define FAIL_MACROS(cause) \
+	if (buf) \
+	    free(buf); \
+	fprintf(stderr, "error %s\n", cause);\
+	close(fd); \
+	return EXIT_FAILURE;
 
 struct dbf7_header_t {
     char db_type;
@@ -76,18 +85,24 @@ struct standart_properties_t {
 int main(int argc, char **argv) {
 
     int fd, i, r;
-    char *db_type_desc;
+    /*char *db_type_desc;*/
     struct dbf7_header_t db_header;
     struct field_descriptor_t field;
     struct field_properties_t properties;
     struct standart_properties_t standart;
     uint8_t field_descriptor_terminator;
-    char *buf = NULL;
-    uint32_t buf_siz = 0;
+    char *buf = NULL, *iconv_buf = NULL, *p;
+    uint32_t buf_siz = 0, iconv_buf_siz;
     struct field_descriptor_t **field_array;
     uint8_t field_count; 
-    uint32_t parsed, j;
+    uint32_t parsed, j, length;
     uint32_t *field_date, *field_time;
+    uint8_t use_langdriver;
+    size_t iconv_bytes;
+    iconv_t iconv_p;
+    
+    char **inbuf, **outbuf;
+    size_t inbytesleft, outbytesleft;
 
     if (argc == 1 || argv[1] == NULL || *argv[1] == 0) {
 	fprintf(stderr, "Use %s <file>", argv[0]);
@@ -113,6 +128,7 @@ int main(int argc, char **argv) {
     
     //printf("Db type: %d\n", db_header.db_type );
 
+    /*
     switch (db_header.db_type) {
 
 		case 0x02: db_type_desc = "FoxBASE"; break;
@@ -135,6 +151,7 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "Unknown db type: %d\n", db_header.db_type);
 	//return EXIT_FAILURE;
     } 
+    */
 
     printf("header siz: %lu\n", sizeof(db_header));
 
@@ -172,7 +189,12 @@ int main(int argc, char **argv) {
 	printf("#%d: %s '%c', size: %d\n", i, field_array[i]->name, field_array[i]->type, field_array[i]->length);
 	if (field_array[i]->length > buf_siz) {
 	    buf_siz = field_array[i]->length;
-	    realloc(buf, buf_siz);
+	    (void) realloc(buf, buf_siz);
+	    if (buf == NULL) {
+		fprintf(stderr, "realloc failed\n");
+		close(fd);
+		return EXIT_FAILURE;
+	    } 
 	} 
     } 
 
@@ -190,12 +212,26 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     } 
 
+    use_langdriver = (*db_header.language_driver) ? 1 : 0;
+
+    if (use_langdriver) {
+	iconv_p = iconv_open("UTF-8", "CP1251");
+
+	if (iconv_p == (iconv_t ) -1) {
+	    FAIL_MACROS(strerror(errno));
+	} 
+
+	iconv_buf_siz = buf_siz * 4;
+	iconv_buf = malloc(iconv_buf_siz);
+
+    } 
+    
 
     for (parsed = 0, j = 0; parsed < db_header.record_siz * db_header.row_count; j++) {
 	    printf("#%u.", j);
 	    r = read(fd, buf, 1);
 	    if (r != 1) {
-		fprintf(stderr, "err read record separator");
+		fprintf(stderr, "err read record separator\n");
 		close(fd);
 		return EXIT_FAILURE;
 	    } 
@@ -214,12 +250,34 @@ int main(int argc, char **argv) {
 			printf("'%ld'(%d) ", (int32_t *) buf, field_array[i]->length);
 		    break;
 		    case 'C':
-			printf("'%s'(%d) ", buf, field_array[i]->length);
+			p = buf;
+			length = field_array[i]->length;
+			if (use_langdriver) {	
+			    inbuf = &buf;
+			    inbytesleft = length;
+			    outbuf = &iconv_buf; 
+			    outbytesleft = iconv_buf_siz;
+    
+			    iconv_bytes = iconv(iconv_p, inbuf, &inbytesleft, outbuf, &outbytesleft);
+
+			    /* restore */
+			    *inbuf -= (length - inbytesleft);
+			    p = *outbuf -= (iconv_buf_siz - outbytesleft);
+			    length = iconv_buf_siz - outbytesleft;
+			    
+			    /*
+			    buggy?
+			    if (iconv_bytes == -1) {
+				FAIL_MACROS(strerror(errno));
+			    } 
+			    */
+			} 
+			printf("'%s'(%d) ", p, length);
 		    break;
 		    case '@':
 			field_date = (uint32_t *) buf; 
 			field_time = (uint32_t *) ((char *) buf + sizeof(uint32_t)); 
-			printf("%lu/%lu(%d)", field_date, field_time);
+			printf("%lu/%lu(%d)", field_date, field_time, field_array[i]->length);
 		    break;
 		    case 'L':
 			printf("'%c'(%d) ", *buf, field_array[i]->length);
