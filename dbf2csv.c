@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <endian.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <iconv.h>
@@ -81,6 +82,24 @@ struct standart_properties_t {
 
 };
 
+long get_long(u_char *cp)
+{
+        long ret;
+
+        ret = *cp++;
+        ret += ((*cp++)<<8);
+        ret += ((*cp++)<<16);
+        ret += ((*cp++)<<24);
+
+        return ret;
+}
+
+long dbf_get_long(char *buf, long *r) {
+    buf[0] = buf[0] ^ 128;
+    memcpy(r, buf, sizeof(long));
+    return be32toh(*r);
+}
+
 
 int main(int argc, char **argv) {
 
@@ -96,10 +115,13 @@ int main(int argc, char **argv) {
     struct field_descriptor_t **field_array;
     uint8_t field_count; 
     uint32_t parsed, j, length;
-    uint32_t *field_date, *field_time;
+    //uint32_t *field_date, *field_time;
+    long int *field_date, *field_time;
     uint8_t use_langdriver;
     size_t iconv_bytes;
     iconv_t iconv_p;
+    double o;
+    long tmp_i;
     
     char **inbuf, **outbuf;
     size_t inbytesleft, outbytesleft;
@@ -247,7 +269,19 @@ int main(int argc, char **argv) {
 		parsed += r;
 		switch(field_array[i]->type) {
 		    case 'I':
-			printf("'%ld'(%d) ", (int32_t *) buf, field_array[i]->length);
+			/*
+			memcpy(&tmp_i, (char *) &buf, sizeof(tmp_i));
+			printf("I'%u'(%d) ", tmp_i, field_array[i]->length);
+			*/
+			//memcpy(&tmp_i, buf, sizeof(tmp_i));
+			//printf("I'%ld'(%u) ", get_long((u_char *) buf), field_array[i]->length);
+			printf("I'%ld'(%u) ", dbf_get_long(buf, &tmp_i), field_array[i]->length);
+		    break;
+		    case 'O':
+			memcpy(&o, buf, sizeof(o));
+			printf("O'%.5f(%d)'\n", o, field_array[i]->length);
+			//o = (double *) buf;
+			//printf("O'%.5f(%d)'\n", *o, field_array[i]->length);
 		    break;
 		    case 'C':
 			p = buf;
@@ -278,10 +312,16 @@ int main(int argc, char **argv) {
 			} 
 			printf("'%.*s'(%d) ", length, p, length);
 		    break;
+		    case 'N':
+			length = field_array[i]->length;
+			while ( length && * ((char *) buf + (length - 1)) == ' ') { 
+			    length--;
+			} 
+			printf("N'%.*s'(%d) ", length, p, length);
+		    break;
 		    case '@':
-			field_date = (uint32_t *) buf; 
-			field_time = (uint32_t *) ((char *) buf + sizeof(uint32_t)); 
-			printf("%lu/%lu(%d)", field_date, field_time, field_array[i]->length);
+			memcpy(&tmp_i, buf, sizeof(long));
+			printf("@%ld(%d)", tmp_i, field_array[i]->length);
 		    break;
 		    case 'L':
 			printf("'%c'(%d) ", *buf, field_array[i]->length);
