@@ -94,10 +94,11 @@ long get_long(u_char *cp)
         return ret;
 }
 
-long dbf_get_long(char *buf, long *r) {
+int32_t dbf_get_int32(char *buf, int32_t *r) {
+    char s = (buf[0] ^ 128) ? 1 : -1;
     buf[0] = buf[0] ^ 128;
-    memcpy(r, buf, sizeof(long));
-    return be32toh(*r);
+    memcpy(r, buf, sizeof(int32_t));
+    return be32toh(*r) * s;
 }
 
 
@@ -121,7 +122,7 @@ int main(int argc, char **argv) {
     size_t iconv_bytes;
     iconv_t iconv_p;
     double o;
-    long tmp_i;
+    int32_t tmp_i;
     
     char **inbuf, **outbuf;
     size_t inbytesleft, outbytesleft;
@@ -269,13 +270,7 @@ int main(int argc, char **argv) {
 		parsed += r;
 		switch(field_array[i]->type) {
 		    case 'I':
-			/*
-			memcpy(&tmp_i, (char *) &buf, sizeof(tmp_i));
-			printf("I'%u'(%d) ", tmp_i, field_array[i]->length);
-			*/
-			//memcpy(&tmp_i, buf, sizeof(tmp_i));
-			//printf("I'%ld'(%u) ", get_long((u_char *) buf), field_array[i]->length);
-			printf("I'%ld'(%u) ", dbf_get_long(buf, &tmp_i), field_array[i]->length);
+			printf("I'%d'(%u) ", dbf_get_int32(buf, &tmp_i), field_array[i]->length);
 		    break;
 		    case 'O':
 			memcpy(&o, buf, sizeof(o));
@@ -320,8 +315,8 @@ int main(int argc, char **argv) {
 			printf("N'%.*s'(%d) ", length, p, length);
 		    break;
 		    case '@':
-			memcpy(&tmp_i, buf, sizeof(long));
-			printf("@%ld(%d)", tmp_i, field_array[i]->length);
+			memcpy(&tmp_i, buf, sizeof(uint32_t));
+			printf("@%u(%d)", tmp_i, field_array[i]->length);
 		    break;
 		    case 'L':
 			printf("'%c'(%d) ", *buf, field_array[i]->length);
