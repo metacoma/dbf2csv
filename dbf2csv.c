@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <endian.h>
 #include <sys/types.h>
@@ -12,11 +13,15 @@
 
 #define DBF7_FIELD_DESCRIPTOR_TERMINATOR 0x0D
 
+#define FIELD_D_SIZ 8
+
 #define FAIL_MACROS(cause) \
 	if (buf) \
 	    free(buf); \
 	fprintf(stderr, "error %s\n", cause);\
-	close(fd); \
+	if (iconv_p)\
+	    iconv_close(iconv_p);\
+	close(fd);\
 	return EXIT_FAILURE;
 
 struct dbf7_header_t {
@@ -120,7 +125,7 @@ int main(int argc, char **argv) {
     long int *field_date, *field_time;
     uint8_t use_langdriver;
     size_t iconv_bytes;
-    iconv_t iconv_p;
+    iconv_t iconv_p = NULL;
     double o;
     int32_t tmp_i;
     
@@ -275,8 +280,6 @@ int main(int argc, char **argv) {
 		    case 'O':
 			memcpy(&o, buf, sizeof(o));
 			printf("O'%.5f(%d)'\n", o, field_array[i]->length);
-			//o = (double *) buf;
-			//printf("O'%.5f(%d)'\n", *o, field_array[i]->length);
 		    break;
 		    case 'C':
 			p = buf;
@@ -314,9 +317,15 @@ int main(int argc, char **argv) {
 			} 
 			printf("N'%.*s'(%d) ", length, p, length);
 		    break;
+		    case 'D':
+			assert(field_array[i]->length == FIELD_D_SIZ);
+			printf("%c%c%c%c%c%c%c%c(%d) ", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], FIELD_D_SIZ);
+			
+			break;
 		    case '@':
-			memcpy(&tmp_i, buf, sizeof(uint32_t));
-			printf("@%u(%d)", tmp_i, field_array[i]->length);
+			//memcpy(&tmp_i, buf, sizeof(uint32_t));
+			//printf("@%d(%d)", le32toh(* (int32_t *) buf), field_array[i]->length);
+			printf("{ 0x%X, 0x%X, 0x%X, 0x%X,   0x%X, 0x%X, 0x%X, 0x%X} ", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
 		    break;
 		    case 'L':
 			printf("'%c'(%d) ", *buf, field_array[i]->length);
@@ -328,6 +337,15 @@ int main(int argc, char **argv) {
 	    } 
 	    printf("\n");
     } 
+
+    free(buf);
+    free(iconv_buf);
+
+    for (i = 0; i < field_count; i++) {
+	free(field_array[i]);
+    } 
+    free(field_array); 
+    iconv_close(iconv_p);
 
     close(fd);
     return EXIT_SUCCESS;
