@@ -10,14 +10,18 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <time.h>
 
 #define DBF7_FIELD_DESCRIPTOR_TERMINATOR 0x0D
+
+#define DBF_RECORD_NORMAL ' '
+#define DBF_RECORD_DELETED '*'
 
 #define FIELD_D_SIZ 8
 
 #define FAIL_MACROS(cause) \
-	if (buf) \
-	    free(buf); \
+	if (iconv_buf) \
+	    free(iconv_buf); \
 	fprintf(stderr, "error %s\n", cause);\
 	if (iconv_p)\
 	    iconv_close(iconv_p);\
@@ -106,6 +110,49 @@ int32_t dbf_get_int32(char *buf, int32_t *r) {
     return be32toh(*r) * s;
 }
 
+void byte_reverse(char *src, char *dst, int buf_siz) {
+    int i, j;
+    for (i = 0, j = buf_siz; buf_siz >= 0; i++, buf_siz--) 
+	dst[i] = src[j]; 
+} 
+
+time_t dbf_get_time(char *buf) {
+    double i = 0; 
+    static char r[8];
+    int j, k;
+    char cbuf[16];
+
+    for (j = 0, k = 7; k >= 0; k--, j++) 
+	r[j] = buf[k]; 
+    
+    memcpy(&i, r, sizeof(r)); 
+
+    if (buf[0] & 0x80) {
+	i = -62135686800000.0 - i;
+    } else {
+	i = -62135686800000.0 + i;
+    } 
+
+    snprintf(cbuf, sizeof cbuf - 1, "%.0f\n", i/1000);
+    return strtoll(cbuf, 0, 10);
+} 
+
+double dbf_get_double(char *buf, size_t buf_siz) {
+    double d;
+    int j, k;
+    char r[8];
+
+    assert(buf_siz == sizeof(double));
+
+    for (j = 0, k = 7; k >= 0; k--, j++) 
+	r[j] = buf[k]; 
+
+    memcpy(&d, r, sizeof(double));
+
+    
+    return d * ((r[0] & 80) ? 1 : - 1);
+} 
+
 
 int main(int argc, char **argv) {
 
@@ -116,7 +163,7 @@ int main(int argc, char **argv) {
     struct field_properties_t properties;
     struct standart_properties_t standart;
     uint8_t field_descriptor_terminator;
-    char *buf = NULL, *iconv_buf = NULL, *p;
+    char *buf = NULL, *iconv_buf = NULL, *p, c, *_p;
     uint32_t buf_siz = 0, iconv_buf_siz;
     struct field_descriptor_t **field_array;
     uint8_t field_count; 
@@ -128,9 +175,17 @@ int main(int argc, char **argv) {
     iconv_t iconv_p = NULL;
     double o;
     int32_t tmp_i;
+    void *record;
     
     char **inbuf, **outbuf;
     size_t inbytesleft, outbytesleft;
+
+    struct tm *tm;
+    time_t t;
+
+    char out_time_buf[32], rev_buf[8];
+    
+    char delim = '|';
 
     if (argc == 1 || argv[1] == NULL || *argv[1] == 0) {
 	fprintf(stderr, "Use %s <file>", argv[0]);
@@ -156,30 +211,6 @@ int main(int argc, char **argv) {
     
     //printf("Db type: %d\n", db_header.db_type );
 
-    /*
-    switch (db_header.db_type) {
-
-		case 0x02: db_type_desc = "FoxBASE"; break;
-		case 0x03: db_type_desc = "FoxBASE+/Dbase III plus, no memo"; break;
-		case 0x30: db_type_desc = "Visual FoxPro"; break;
-		case 0x31: db_type_desc = "Visual FoxPro, autoincrement enabled"; break;
-		case 0x32: db_type_desc = "Visual FoxPro with field type Varchar or Varbinary"; break;
-		case 0x43: db_type_desc = "dBASE IV SQL table files, no memo"; break;
-		case 0x63: db_type_desc = "dBASE IV SQL system files, no memo"; break;
-		case 0x83: db_type_desc = "FoxBASE+/dBASE III PLUS, with memo"; break;
-		case 0x8B: db_type_desc = "dBASE IV with memo"; break;
-		case 0xCB: db_type_desc = "dBASE IV SQL table files, with memo"; break;
-		case 0xF5: db_type_desc = "FoxPro 2.x (or earlier) with memo"; break;
-		case 0xE5: db_type_desc = "HiPer-Six format with SMT memo file"; break;
-		case 0xFB: db_type_desc = "FoxBASE"; break;
-		default: db_type_desc = NULL; 
-    }; 
-
-    if (db_type_desc == NULL) {
-	fprintf(stderr, "Unknown db type: %d\n", db_header.db_type);
-	//return EXIT_FAILURE;
-    } 
-    */
 
     printf("header siz: %lu\n", sizeof(db_header));
 
@@ -203,27 +234,21 @@ int main(int argc, char **argv) {
 	return EXIT_FAILURE;
     } 
 
-    buf = malloc(256);
-    buf_siz = 256;
+    iconv_buf_siz = 0;
     
     for (i = 0; i < field_count; i++) {
 	field_array[i] = malloc(sizeof(struct field_descriptor_t));
-	/*if (read(fd, &field, sizeof(struct field_descriptor_t)) != sizeof(struct field_descriptor_t)) { */
+
 	if (read(fd, field_array[i], sizeof(struct field_descriptor_t)) != sizeof(struct field_descriptor_t)) { 
 	    fprintf(stderr, "field_descriptior_t read err\n");
 	    close(fd);
 	    return EXIT_FAILURE;
 	} 
+
 	printf("#%d: %s '%c', size: %d\n", i, field_array[i]->name, field_array[i]->type, field_array[i]->length);
-	if (field_array[i]->length > buf_siz) {
-	    buf_siz = field_array[i]->length;
-	    (void) realloc(buf, buf_siz);
-	    if (buf == NULL) {
-		fprintf(stderr, "realloc failed\n");
-		close(fd);
-		return EXIT_FAILURE;
-	    } 
-	} 
+
+	if (field_array[i]->length > iconv_buf_siz) 
+	    iconv_buf_siz = field_array[i]->length;
     } 
 
     if (read(fd, &field_descriptor_terminator, sizeof(field_descriptor_terminator)) != sizeof(field_descriptor_terminator)) {
@@ -249,20 +274,126 @@ int main(int argc, char **argv) {
 	    FAIL_MACROS(strerror(errno));
 	} 
 
-	iconv_buf_siz = buf_siz * 4;
+	assert(iconv_buf_siz);
+
+	iconv_buf_siz = iconv_buf_siz * 4;
 	iconv_buf = malloc(iconv_buf_siz);
 
     } 
     
 
+    record = malloc(db_header.record_siz);
+
     for (parsed = 0, j = 0; parsed < db_header.record_siz * db_header.row_count; j++) {
-	    printf("#%u.", j);
-	    r = read(fd, buf, 1);
-	    if (r != 1) {
-		fprintf(stderr, "err read record separator\n");
-		close(fd);
-		return EXIT_FAILURE;
+
+	    r = read(fd, record, db_header.record_siz);
+
+	    if (r == -1) {
+		FAIL_MACROS(strerror(errno));
 	    } 
+
+	    assert( r == db_header.record_siz );
+
+	    p = record;
+
+	    assert( *p == DBF_RECORD_NORMAL || *p == DBF_RECORD_DELETED );
+
+	    parsed += db_header.record_siz;
+	    
+	    if ( *p == DBF_RECORD_DELETED ) {
+		j--;
+		continue;
+	    } 
+
+	    p++; /* skip record separator */
+
+	    //printf("#%u. ", j);
+
+	    for (i = 0; i < field_count; i++) {
+		buf = p;
+		buf_siz = field_array[i]->length;
+
+
+		switch(field_array[i]->type) {
+		    case 'I':
+			printf("%d", dbf_get_int32(buf, &tmp_i));
+		    break;
+		    case 'O':
+			printf("%.0f", dbf_get_double(buf, buf_siz));
+		    break;
+		    case 'C':
+			_p = buf;
+			length = field_array[i]->length;
+
+			if (use_langdriver) {	
+			    inbuf = &buf;
+			    inbytesleft = length;
+			    outbuf = &iconv_buf; 
+			    outbytesleft = iconv_buf_siz;
+    
+			    iconv_bytes = iconv(iconv_p, inbuf, &inbytesleft, outbuf, &outbytesleft);
+
+			    /* restore */
+			    *inbuf -= (length - inbytesleft);
+			    _p = *outbuf -= (iconv_buf_siz - outbytesleft);
+			    length = iconv_buf_siz - outbytesleft;
+			    
+			    /*
+			    buggy?
+			    if (iconv_bytes == -1) {
+				FAIL_MACROS(strerror(errno));
+			    } 
+			    */
+			} 
+			/* remove last spaces */; 
+			while ( length && * ((char *) _p + (length - 1)) == ' ') { 
+			    length--;
+			} 
+			printf("%.*s", length, _p);
+		    break;
+		    case 'N':
+			length = field_array[i]->length;
+			while ( length && * ((char *) buf + (length - 1)) == ' ') { 
+			    length--;
+			} 
+			printf("%.*s", length , buf);
+		    break;
+		    case 'D':
+			assert(field_array[i]->length == FIELD_D_SIZ);
+			printf("%c%c%c%c%c%c%c%c ", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+			
+			break;
+		    case '@':
+			if (*p) {
+			    t = dbf_get_time(buf);	
+			    tm = localtime(&t);	
+			    if (tm == NULL) {
+				FAIL_MACROS("localtime");
+			    } 
+			
+			    strftime(out_time_buf, sizeof(out_time_buf), "%F %H:%M:%S", tm );
+			    printf("%s", out_time_buf);
+			} 
+			
+		    break;
+		    case 'L':
+			printf("%c", *buf);
+		    break;
+		    default:
+			fprintf(stderr, "Unknown field type: '%c'\n", field_array[i]->type);
+		    break;
+		} 
+
+		printf("%c", delim);
+		p += field_array[i]->length;
+	    }
+	    printf("\n");
+
+	    //assert( (char *) record + db_header.record_siz == p ); 
+	    continue;
+	
+
+
 	    parsed += r;
 	    for (i = 0; i < field_count; i++) { 
 		memset(buf, 0, buf_siz);
@@ -323,9 +454,11 @@ int main(int argc, char **argv) {
 			
 			break;
 		    case '@':
-			//memcpy(&tmp_i, buf, sizeof(uint32_t));
-			//printf("@%d(%d)", le32toh(* (int32_t *) buf), field_array[i]->length);
-			printf("{ 0x%X, 0x%X, 0x%X, 0x%X,   0x%X, 0x%X, 0x%X, 0x%X} ", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+			/*
+			    memcpy(&tmp_i, buf, sizeof(uint32_t));
+			    printf("@%d(%d)", le32toh(* (int32_t *) buf), field_array[i]->length);
+			*/
+			printf("{ %#x %#x %#x %#x    %#x %#x %#x %#x } ",(unsigned char )  buf[0], (unsigned char )  buf[1],(unsigned char )  buf[2],(unsigned char )  buf[3],(unsigned char )  buf[4],(unsigned char )  buf[5],(unsigned char )  buf[6], (unsigned char )  buf[7]);
 		    break;
 		    case 'L':
 			printf("'%c'(%d) ", *buf, field_array[i]->length);
@@ -338,7 +471,7 @@ int main(int argc, char **argv) {
 	    printf("\n");
     } 
 
-    free(buf);
+    //free(buf);
     free(iconv_buf);
 
     for (i = 0; i < field_count; i++) {
