@@ -28,6 +28,9 @@
 	close(fd);\
 	return EXIT_FAILURE;
 
+#define DELIMITER_DEFAULT '|'
+
+
 struct dbf7_header_t {
     char db_type;
     char last_update[3];
@@ -122,6 +125,7 @@ time_t dbf_get_time(char *buf) {
     int j, k;
     char cbuf[16];
 
+    /* reverse, XXX check endiness */
     for (j = 0, k = 7; k >= 0; k--, j++) 
 	r[j] = buf[k]; 
     
@@ -144,14 +148,16 @@ double dbf_get_double(char *buf, size_t buf_siz) {
 
     assert(buf_siz == sizeof(double));
 
+    /* reverse, XXX check endiness */
     for (j = 0, k = 7; k >= 0; k--, j++) 
 	r[j] = buf[k]; 
 
     memcpy(&d, r, sizeof(double));
 
-    
     return d * ((r[0] & 80) ? 1 : - 1);
 } 
+
+
 
 
 int main(int argc, char **argv) {
@@ -185,17 +191,44 @@ int main(int argc, char **argv) {
 
     char out_time_buf[32], rev_buf[8];
     
-    char delim = '|';
+    char delim = DELIMITER_DEFAULT, opt;
+    char *filename;
 
+    char info_only = 0, awk_output = 0;
+    char *timestamp_fmt = "%F %H:%M:%S";
+
+
+    while ((opt = getopt(argc, argv, "d:iat:")) != -1) {
+	    switch (opt) {
+		case 'd':
+		    delim = *optarg;
+		break;
+		case 'i':
+		    info_only = 1;
+		break;
+		case 'a':
+		    awk_output = 1;
+		break;
+		case 't':
+		    timestamp_fmt = optarg;
+		break;
+	    } 
+    } 
+
+
+    /*
     if (argc == 1 || argv[1] == NULL || *argv[1] == 0) {
 	fprintf(stderr, "Use %s <file>", argv[0]);
 	return EXIT_FAILURE;
     } 
+    */
+    
+    filename = (argc == 1) ? argv[1] : argv[argc - 1]; 
 
-    fd = open(argv[1], O_RDONLY);
+    fd = open(filename, O_RDONLY);
 
     if (fd == -1) {
-	fprintf(stderr, "can't open src.dbf\n");
+	fprintf(stderr, "can't open %s\n", filename);
 	return EXIT_FAILURE;
     } 
 
@@ -212,11 +245,15 @@ int main(int argc, char **argv) {
     //printf("Db type: %d\n", db_header.db_type );
 
 
-    printf("header siz: %lu\n", sizeof(db_header));
+    if (info_only && !awk_output) {
 
-    printf("Last modified: %d/%d/%d\n", db_header.last_update[0] + 1900, db_header.last_update[1], db_header.last_update[2]);
-    printf("Row count: %u\n", db_header.row_count);
-    printf("Header siz: %u, record siz: %u\n", db_header.header_siz, db_header.record_siz);
+	printf("header siz: %lu\n", sizeof(db_header));
+
+	printf("Last modified: %d/%d/%d\n", db_header.last_update[0] + 1900, db_header.last_update[1], db_header.last_update[2]);
+	printf("Row count: %u\n", db_header.row_count);
+	printf("Header siz: %u, record siz: %u\n", db_header.header_siz, db_header.record_siz);
+
+    } 
 
     if ( (db_header.header_siz - (sizeof(struct dbf7_header_t) + 1) ) % sizeof(struct field_descriptor_t) != 0 ) {
 	fprintf(stderr, "db header size mistmatch\n");
@@ -245,11 +282,18 @@ int main(int argc, char **argv) {
 	    return EXIT_FAILURE;
 	} 
 
-	printf("#%d: %s '%c', size: %d\n", i, field_array[i]->name, field_array[i]->type, field_array[i]->length);
+	if (info_only) 
+	    if (!awk_output) 
+		printf("#%d: %s '%c', size: %d\n", i, field_array[i]->name, field_array[i]->type, field_array[i]->length);
+	    else
+		printf("\t%s = $%d\n", field_array[i]->name, i + 1);
 
 	if (field_array[i]->length > iconv_buf_siz) 
 	    iconv_buf_siz = field_array[i]->length;
     } 
+
+    if (info_only) 
+	return EXIT_SUCCESS;
 
     if (read(fd, &field_descriptor_terminator, sizeof(field_descriptor_terminator)) != sizeof(field_descriptor_terminator)) {
         fprintf(stderr, "field_descriptor_terminator read err\n");
@@ -268,6 +312,7 @@ int main(int argc, char **argv) {
     use_langdriver = (*db_header.language_driver) ? 1 : 0;
 
     if (use_langdriver) {
+	//printf("Use langdriver: %s\n", db_header.language);
 	iconv_p = iconv_open("UTF-8", "CP1251");
 
 	if (iconv_p == (iconv_t ) -1) {
@@ -306,8 +351,6 @@ int main(int argc, char **argv) {
 	    } 
 
 	    p++; /* skip record separator */
-
-	    //printf("#%u. ", j);
 
 	    for (i = 0; i < field_count; i++) {
 		buf = p;
@@ -356,6 +399,13 @@ int main(int argc, char **argv) {
 			while ( length && * ((char *) buf + (length - 1)) == ' ') { 
 			    length--;
 			} 
+
+			/* remove head spaces */
+			while (*buf == ' ' && length) {
+			    length--;
+			    buf++;
+			} 
+
 			printf("%.*s", length , buf);
 		    break;
 		    case 'D':
@@ -371,7 +421,7 @@ int main(int argc, char **argv) {
 				FAIL_MACROS("localtime");
 			    } 
 			
-			    strftime(out_time_buf, sizeof(out_time_buf), "%F %H:%M:%S", tm );
+			    strftime(out_time_buf, sizeof(out_time_buf), timestamp_fmt, tm );
 			    printf("%s", out_time_buf);
 			} 
 			
@@ -390,85 +440,6 @@ int main(int argc, char **argv) {
 	    printf("\n");
 
 	    //assert( (char *) record + db_header.record_siz == p ); 
-	    continue;
-	
-
-
-	    parsed += r;
-	    for (i = 0; i < field_count; i++) { 
-		memset(buf, 0, buf_siz);
-		r = read(fd, buf, field_array[i]->length);
-		if (r != field_array[i]->length) {
-		    fprintf(stderr, "record read err: %d\n", r);
-		    close(fd);
-		    return EXIT_FAILURE;
-		} 
-		parsed += r;
-		switch(field_array[i]->type) {
-		    case 'I':
-			printf("I'%d'(%u) ", dbf_get_int32(buf, &tmp_i), field_array[i]->length);
-		    break;
-		    case 'O':
-			memcpy(&o, buf, sizeof(o));
-			printf("O'%.5f(%d)'\n", o, field_array[i]->length);
-		    break;
-		    case 'C':
-			p = buf;
-			length = field_array[i]->length;
-			if (use_langdriver) {	
-			    inbuf = &buf;
-			    inbytesleft = length;
-			    outbuf = &iconv_buf; 
-			    outbytesleft = iconv_buf_siz;
-    
-			    iconv_bytes = iconv(iconv_p, inbuf, &inbytesleft, outbuf, &outbytesleft);
-
-			    /* restore */
-			    *inbuf -= (length - inbytesleft);
-			    p = *outbuf -= (iconv_buf_siz - outbytesleft);
-			    length = iconv_buf_siz - outbytesleft;
-			    
-			    /*
-			    buggy?
-			    if (iconv_bytes == -1) {
-				FAIL_MACROS(strerror(errno));
-			    } 
-			    */
-			} 
-			/* remove last spaces */; 
-			while ( length && * ((char *) p + (length - 1)) == ' ') { 
-			    length--;
-			} 
-			printf("'%.*s'(%d) ", length, p, length);
-		    break;
-		    case 'N':
-			length = field_array[i]->length;
-			while ( length && * ((char *) buf + (length - 1)) == ' ') { 
-			    length--;
-			} 
-			printf("N'%.*s'(%d) ", length, p, length);
-		    break;
-		    case 'D':
-			assert(field_array[i]->length == FIELD_D_SIZ);
-			printf("%c%c%c%c%c%c%c%c(%d) ", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], FIELD_D_SIZ);
-			
-			break;
-		    case '@':
-			/*
-			    memcpy(&tmp_i, buf, sizeof(uint32_t));
-			    printf("@%d(%d)", le32toh(* (int32_t *) buf), field_array[i]->length);
-			*/
-			printf("{ %#x %#x %#x %#x    %#x %#x %#x %#x } ",(unsigned char )  buf[0], (unsigned char )  buf[1],(unsigned char )  buf[2],(unsigned char )  buf[3],(unsigned char )  buf[4],(unsigned char )  buf[5],(unsigned char )  buf[6], (unsigned char )  buf[7]);
-		    break;
-		    case 'L':
-			printf("'%c'(%d) ", *buf, field_array[i]->length);
-		    break;
-		    default:
-			fprintf(stderr, "Unknown field type: '%c'\n", field_array[i]->type);
-		    break;
-		} 
-	    } 
-	    printf("\n");
     } 
 
     //free(buf);
