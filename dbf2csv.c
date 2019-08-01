@@ -30,6 +30,12 @@
 
 #define DELIMITER_DEFAULT '|'
 
+enum info_style_t {
+    INFO_STYLE_SIMPLE = 1,
+    INFO_STYLE_AWK,
+    INFO_STYLE_SQLITE,
+};
+
 
 struct dbf7_header_t {
     char db_type;
@@ -158,6 +164,29 @@ double dbf_get_double(char *buf, size_t buf_siz) {
 } 
 
 
+char *dbf2sqllite_type(char type, int length) {
+    static char buf[16];
+    switch (type) { 
+	case 'I':	
+	    return "INTEGER";
+	break;
+	case 'N':	
+	    return "NUMERIC";
+	break;
+	case 'O':
+	    return "DOUBLE";
+	break;
+	case 'C':
+	    snprintf(buf, sizeof buf - 1, "VARCHAR(%d)", length); 
+	    return buf;
+	break;
+	case '@':
+	    return "DATETIME";
+	break;
+	default:
+	    abort();
+    } 
+} 
 
 
 int main(int argc, char **argv) {
@@ -194,20 +223,23 @@ int main(int argc, char **argv) {
     char delim = DELIMITER_DEFAULT, opt;
     char *filename;
 
-    char info_only = 0, awk_output = 0;
+    char info_only = 0;
     char *timestamp_fmt = "%F %H:%M:%S";
 
 
-    while ((opt = getopt(argc, argv, "d:iat:")) != -1) {
+    while ((opt = getopt(argc, argv, "d:iast:")) != -1) {
 	    switch (opt) {
 		case 'd':
 		    delim = *optarg;
 		break;
 		case 'i':
-		    info_only = 1;
+		    info_only = INFO_STYLE_SIMPLE;
 		break;
 		case 'a':
-		    awk_output = 1;
+		    info_only = INFO_STYLE_AWK;
+		break;
+		case 's':
+		    info_only = INFO_STYLE_SQLITE;
 		break;
 		case 't':
 		    timestamp_fmt = optarg;
@@ -216,13 +248,6 @@ int main(int argc, char **argv) {
     } 
 
 
-    /*
-    if (argc == 1 || argv[1] == NULL || *argv[1] == 0) {
-	fprintf(stderr, "Use %s <file>", argv[0]);
-	return EXIT_FAILURE;
-    } 
-    */
-    
     filename = (argc == 1) ? argv[1] : argv[argc - 1]; 
 
     fd = open(filename, O_RDONLY);
@@ -245,15 +270,7 @@ int main(int argc, char **argv) {
     //printf("Db type: %d\n", db_header.db_type );
 
 
-    if (info_only && !awk_output) {
-
-	printf("header siz: %lu\n", sizeof(db_header));
-
-	printf("Last modified: %d/%d/%d\n", db_header.last_update[0] + 1900, db_header.last_update[1], db_header.last_update[2]);
-	printf("Row count: %u\n", db_header.row_count);
-	printf("Header siz: %u, record siz: %u\n", db_header.header_siz, db_header.record_siz);
-
-    } 
+	
 
     if ( (db_header.header_siz - (sizeof(struct dbf7_header_t) + 1) ) % sizeof(struct field_descriptor_t) != 0 ) {
 	fprintf(stderr, "db header size mistmatch\n");
@@ -262,6 +279,19 @@ int main(int argc, char **argv) {
     } 
 
     field_count = (db_header.header_siz - (sizeof(struct dbf7_header_t) + 1)) / sizeof(struct field_descriptor_t);
+
+    if (info_only == INFO_STYLE_SIMPLE) {
+
+	printf("file name: %s\n", filename);
+	printf("header siz: %lu\n", sizeof(db_header));
+
+	printf("Last modified: %d/%d/%d\n", db_header.last_update[0] + 1900, db_header.last_update[1], db_header.last_update[2]);
+	printf("Row count: %u\n", db_header.row_count);
+	printf("Header siz: %u, record siz: %u\n", db_header.header_siz, db_header.record_siz);
+	printf("Field count: %d\n", field_count);
+    } 
+
+
 
     field_array = malloc( sizeof (struct field_descriptor_t *) * field_count);
 
@@ -272,7 +302,8 @@ int main(int argc, char **argv) {
     } 
 
     iconv_buf_siz = 0;
-    
+
+
     for (i = 0; i < field_count; i++) {
 	field_array[i] = malloc(sizeof(struct field_descriptor_t));
 
@@ -281,19 +312,33 @@ int main(int argc, char **argv) {
 	    close(fd);
 	    return EXIT_FAILURE;
 	} 
-
+	
 	if (info_only) 
-	    if (!awk_output) 
+	switch (info_only) {
+	    case INFO_STYLE_SIMPLE:
 		printf("#%d: %s '%c', size: %d\n", i, field_array[i]->name, field_array[i]->type, field_array[i]->length);
-	    else
+	    break;
+	    case INFO_STYLE_AWK:
 		printf("\t%s = $%d\n", field_array[i]->name, i + 1);
+	    break;
+	    case INFO_STYLE_SQLITE:
+		printf("%s %s %c\n", field_array[i]->name, dbf2sqllite_type(field_array[i]->type, field_array[i]->length), (i != field_count - 1) ? ',' : ' ');
+	    break;
+	    default:
+		abort();
+	} 
 
 	if (field_array[i]->length > iconv_buf_siz) 
 	    iconv_buf_siz = field_array[i]->length;
     } 
 
-    if (info_only) 
+
+    if (info_only) {
+	if (info_only == INFO_STYLE_SQLITE) {
+	    printf(");\n");
+	} 
 	return EXIT_SUCCESS;
+    } 
 
     if (read(fd, &field_descriptor_terminator, sizeof(field_descriptor_terminator)) != sizeof(field_descriptor_terminator)) {
         fprintf(stderr, "field_descriptor_terminator read err\n");
@@ -337,7 +382,6 @@ int main(int argc, char **argv) {
 		FAIL_MACROS(strerror(errno));
 	    } 
 
-	    assert( r == db_header.record_siz );
 
 	    p = record;
 
@@ -429,12 +473,17 @@ int main(int argc, char **argv) {
 		    case 'L':
 			printf("%c", *buf);
 		    break;
+		    case 'M': // memo
+			/* STUB */
+			printf("0");	
+		    break;
 		    default:
 			fprintf(stderr, "Unknown field type: '%c'\n", field_array[i]->type);
 		    break;
 		} 
 
-		printf("%c", delim);
+		if (field_count - 1 != i) 
+		    printf("%c", delim);
 		p += field_array[i]->length;
 	    }
 	    printf("\n");
